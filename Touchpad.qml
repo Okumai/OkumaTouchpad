@@ -14,7 +14,10 @@ Item {
     id: root
     property var shell: null
     readonly property string pluginId: "okuma.dev_touchpad4omarchy"
-    readonly property string directory: decodeURIComponent(Qt.resolvedUrl(".").toString().replace(/^file:\/\//, ""))
+    // Resolve each helper URL directly: Qt.resolvedUrl(".") need not end in '/'.
+    function localFile(name) {
+        return decodeURIComponent(Qt.resolvedUrl(name).toString().replace(/^file:\/\//, ""));
+    }
     readonly property string panelFont: shell && shell.bar ? shell.bar.fontFamily : Commons.Style.font.family
     readonly property color foreground: Commons.Color.foreground
     property bool opened: false
@@ -22,11 +25,29 @@ Item {
     property var fields: []
     property string output: ""
     property string operation: ""
+    property string resultState: "unknown"
+    property string statusMessage: ""
+    property string launcherMessage: ""
     property bool dirty: false
     property string selectedGroup: "Touchpad"
     readonly property var groups: ["Touchpad", "Workspaces", "Vertical swipes", "Pinch", "Integration"]
     readonly property bool busy: worker.running
     Commons.Translations { id: strings; directory: Qt.resolvedUrl("i18n") }
+    // Omarchy's git installer does not run install.py or other repository hooks.
+    // Register only the application entry on enable/load; never apply input settings.
+    Component.onCompleted: launcherWorker.running = true
+    Process {
+        id: launcherWorker
+        command: ["python3", root.localFile("launcher.py"), "install"]
+        property string errors: ""
+        stderr: StdioCollector { onStreamFinished: launcherWorker.errors = text }
+        onExited: (exitCode, exitStatus) => {
+            if (exitCode !== 0 || exitStatus !== 0) {
+                root.launcherMessage = strings.t("launcherFailed") + "\n" + errors;
+                console.warn("OkumaTouchpad launcher registration failed: " + errors);
+            }
+        }
+    }
 
     component PanelText: Text {
         color: root.foreground
@@ -52,7 +73,8 @@ Item {
     function status() { return opened ? "open" : "closed"; }
     function diagnostics() {
         return JSON.stringify({opened: opened, busy: busy, dirty: dirty, fieldCount: fields.length,
-            settings: draft, operation: operation, output: output,
+            settings: draft, operation: operation, output: output, resultState: resultState,
+            statusMessage: statusMessage, launcherMessage: launcherMessage,
             geometry: {screenHeight: panel.height, cardHeight: card.height, top: card.y,
                 bottom: panel.height - card.y - card.height}, selectedGroup: selectedGroup});
     }
@@ -62,12 +84,18 @@ Item {
         next[key] = value;
         draft = next;
         dirty = true;
+        resultState = "draft";
+        statusMessage = strings.t("unsaved");
     }
     function execute(action) {
         if (busy) return;
         operation = action;
         output = "";
-        let args = ["python3", directory + "touchpad.py", action];
+        if (action === "apply") {
+            resultState = "working";
+            statusMessage = strings.t("working");
+        }
+        let args = ["python3", localFile("touchpad.py"), action];
         if (action === "apply" || action === "preview")
             args = args.concat(["--settings-json", JSON.stringify(draft)]);
         worker.command = args;
@@ -81,17 +109,32 @@ Item {
         stdout: StdioCollector { onStreamFinished: worker.result = text }
         stderr: StdioCollector { onStreamFinished: worker.errors = text }
         onExited: (exitCode, exitStatus) => {
-            if (root.operation === "describe" && exitCode === 0) {
+            const succeeded = exitCode === 0 && exitStatus === 0;
+            if (root.operation === "describe" && succeeded) {
                 try {
                     const data = JSON.parse(result);
                     root.draft = data.settings;
                     root.fields = data.fields;
                     root.output = data.warnings.join("\n");
                     root.dirty = false;
-                } catch (error) { root.output = String(error); }
+                    root.resultState = data.status.applied ? "applied" : "inactive";
+                    root.statusMessage = data.status.message;
+                } catch (error) {
+                    root.resultState = "failed";
+                    root.statusMessage = strings.t("readFailed");
+                    root.output = String(error);
+                }
             } else {
                 root.output = result + (errors ? "\n" + errors : "");
-                if (exitCode === 0 && root.operation === "apply") root.dirty = false;
+                if (!succeeded) {
+                    root.resultState = "failed";
+                    root.statusMessage = root.operation === "apply" ? strings.t("applyFailed") : strings.t("operationFailed");
+                    if (!root.output.trim()) root.output = "Helper exited with code " + exitCode + ", status " + exitStatus;
+                } else if (root.operation === "apply") {
+                    root.dirty = false;
+                    root.resultState = "applied";
+                    root.statusMessage = strings.t("applySucceeded");
+                }
             }
         }
     }
@@ -240,8 +283,14 @@ Item {
                 Ui.PanelSeparator { Layout.fillWidth: true }
                 PanelText {
                     Layout.fillWidth: true
-                    text: root.busy ? strings.t("working") : root.dirty ? strings.t("unsaved") : strings.t("explicit")
-                    opacity: 0.65
+                    text: root.busy ? strings.t("working") : root.statusMessage || strings.t("explicit")
+                    font.bold: root.resultState === "failed" || root.resultState === "inactive"
+                    font.pixelSize: Commons.Style.font.bodySmall
+                }
+                PanelText {
+                    Layout.fillWidth: true
+                    visible: root.launcherMessage !== ""
+                    text: root.launcherMessage
                     font.pixelSize: Commons.Style.font.bodySmall
                 }
                 Flow {

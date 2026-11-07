@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "okuma.dev_touchpad4omarchy",
   "name": "OkumaTouchpad",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": "OKUMA",
   "description": "Customizable native Hyprland touchpad preferences, workspace swipes, bar gestures and Launchpad pinch integration.",
   "kinds": ["panel"],

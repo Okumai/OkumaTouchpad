@@ -38,9 +38,10 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(t.render({})[1], t.render(t.DEFAULTS)[1])
 
     def test_three_finger_profile_owns_one_pinch(self):
-        source, _ = t.render({"pinchFingers": 3})
+        settings = t.validate(dict(pinchFingers=3, pinchIn="launchpad-open", threeFingerSpread="launchpad-close"))
+        source, _ = t.render(settings)
         self.assertEqual(source.count('direction = "pinch"'), 1)
-        self.assertIn("ignored", " ".join(t.warnings(t.validate({"pinchFingers": 3}))))
+        self.assertIn("ignored", " ".join(t.warnings(settings)))
 
     def test_disabled_gestures(self):
         source, _ = t.render(dict(workspaceSwipe=False, swipeUp="none", swipeDown="none",
@@ -49,7 +50,8 @@ class SettingsTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("lua"), "Lua is required")
     def test_generated_callbacks(self):
-        source, _ = t.render({})
+        source, _ = t.render(dict(pinchIn="launchpad-open", pinchOut="launchpad-close",
+                                  threeFingerSpread="launchpad-close"))
         harness = '''local commands, bindings = {}, {}
 hl = {
   config = function(c) assert(c.input.touchpad.natural_scroll == true) end,
@@ -136,7 +138,7 @@ local b = [=[hl.gesture({})]=]
                 kind, value = values[option.split(":")[-1]]
                 return json.dumps({kind: value})
             return ""
-        with patch.object(t, "preflight"), patch.object(t, "run", side_effect=fake_run):
+        with patch.object(t, "preflight", return_value=[]), patch.object(t, "run", side_effect=fake_run):
             t.apply(self.home, settings)
             first = self.main.read_text()
             t.apply(self.home, settings)
@@ -157,10 +159,61 @@ local b = [=[hl.gesture({})]=]
         with self.assertRaises(ValueError):
             t.atomic_write(self.target, "bad")
 
-    def test_missing_launchpad_does_not_fall_back_silently(self):
-        with patch.object(t.shutil, "which", return_value="/usr/bin/tool"), patch.object(t, "run", side_effect=["", "ok", "unavailable"]):
-            with self.assertRaisesRegex(RuntimeError, "Launchpad"):
+    def test_missing_launchpad_warns_without_blocking_apply(self):
+        settings = t.validate(dict(pinchIn="launchpad-open"))
+        def fake_run(*args):
+            if args[0] == "omarchy-shell":
+                raise RuntimeError("unknown plugin")
+            if args[:3] == ("hyprctl", "-j", "getoption"):
+                option = args[3].split(":")[-1]
+                source, _ = t.render(settings)
+                # Map the generated option back to its JSON type as hyprctl does.
+                import re
+                value = re.search(r"\b" + option + r" = ([^,]+),", source).group(1)
+                decoded = json.loads(value)
+                kind = "bool" if type(decoded) is bool else "str" if isinstance(decoded, str) else "float" if type(decoded) is float else "int"
+                return json.dumps({kind: decoded})
+            return ""
+        with patch.object(t.shutil, "which", return_value="/usr/bin/tool"), patch.object(t, "run", side_effect=fake_run):
+            notices = t.apply(self.home, settings)
+        self.assertIn("unavailable", " ".join(notices))
+        self.assertEqual(t.read_settings(self.config), settings)
+        self.assertIn("summon", self.target.read_text())
+
+    def test_defaults_have_no_optional_launchpad_dependency(self):
+        with patch.object(t.shutil, "which", return_value="/usr/bin/tool"), patch.object(t, "run", return_value="") as run:
+            self.assertEqual(t.preflight(t.validate({})), [])
+            self.assertFalse(any(c.args[0] == "omarchy-shell" for c in run.call_args_list))
+        self.assertNotIn('direction = "pinch"', t.render({})[0])
+
+    def test_unsupported_lua_api_explains_failure(self):
+        with patch.object(t.shutil, "which", return_value="/usr/bin/tool"), patch.object(t, "run", side_effect=["", RuntimeError("unknown request")]):
+            with self.assertRaisesRegex(RuntimeError, "Legacy hyprland.conf"):
                 t.preflight(t.validate({}))
+
+    def test_status_distinguishes_saved_from_applied(self):
+        settings = t.validate({})
+        self.assertFalse(t.application_status(self.home, settings)["applied"])
+        self.config.parent.mkdir(parents=True)
+        self.config.write_text(json.dumps(settings))
+        self.target.write_text(t.render(settings)[0])
+        with patch.object(t, "run", side_effect=RuntimeError("not loaded")):
+            self.assertIn("not loaded", t.application_status(self.home, settings)["message"])
+        with patch.object(t, "run", return_value="ok"), patch.object(t, "verify_effective", side_effect=RuntimeError("override")):
+            self.assertFalse(t.application_status(self.home, settings)["applied"])
+        with patch.object(t, "run", return_value="ok"), patch.object(t, "verify_effective"):
+            self.assertTrue(t.application_status(self.home, settings)["applied"])
+
+    def test_effective_mismatch_rolls_back_saved_profile(self):
+        original = self.main.read_text()
+        def fake_run(*args):
+            return "{}" if args[:3] == ("hyprctl", "-j", "getoption") else ""
+        with patch.object(t, "preflight", return_value=[]), patch.object(t, "run", side_effect=fake_run):
+            with self.assertRaisesRegex(RuntimeError, "Effective setting mismatch"):
+                t.apply(self.home, t.validate({}))
+        self.assertEqual(self.main.read_text(), original)
+        self.assertFalse(self.target.exists())
+        self.assertFalse(self.config.exists())
 
 
 if __name__ == "__main__":

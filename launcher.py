@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+from touchpad import atomic_write
 
 DESKTOP_ID = "okuma-touchpad.desktop"
 MARKER = "X-OkumaTouchpad-Managed=true"
@@ -33,9 +34,13 @@ def install(home=None):
         raise ValueError(f"Refusing to overwrite a different icon: {icon}")
     desktop.parent.mkdir(parents=True, exist_ok=True)
     icon.parent.mkdir(parents=True, exist_ok=True)
-    icon.write_text(source_icon)
-    desktop.write_text((ROOT / DESKTOP_ID).read_text())
-    if shutil.which("update-desktop-database"):
+    source_desktop = (ROOT / DESKTOP_ID).read_text()
+    changed = False
+    for path, text in ((icon, source_icon), (desktop, source_desktop)):
+        if not path.exists() or path.read_text() != text:
+            atomic_write(path, text)
+            changed = True
+    if changed and shutil.which("update-desktop-database"):
         subprocess.run(["update-desktop-database", str(desktop.parent)], check=True, timeout=15)
     print(f"Application launcher installed: {desktop}")
 

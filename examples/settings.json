@@ -17,9 +17,9 @@
   "swipeUp": "bar-hide",
   "swipeDown": "bar-show",
   "pinchFingers": 4,
-  "pinchIn": "launchpad-open",
-  "pinchOut": "launchpad-close",
-  "threeFingerSpread": "launchpad-close",
+  "pinchIn": "none",
+  "pinchOut": "none",
+  "threeFingerSpread": "none",
   "pinchThreshold": 0.1,
   "launchpadPlugin": "okuma.dev_launchpad4omarchy"
 }

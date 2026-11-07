@@ -45,9 +45,9 @@ FIELDS = [
     field("swipeUp", "Swipe up action", "Vertical swipes", "enum", "bar-hide", choices=ACTIONS),
     field("swipeDown", "Swipe down action", "Vertical swipes", "enum", "bar-show", choices=ACTIONS),
     field("pinchFingers", "Primary pinch finger count", "Pinch", "enum", 4, choices=[3, 4]),
-    field("pinchIn", "Pinch inward action", "Pinch", "enum", "launchpad-open", choices=ACTIONS),
-    field("pinchOut", "Spread outward action", "Pinch", "enum", "launchpad-close", choices=ACTIONS),
-    field("threeFingerSpread", "Extra three-finger spread action (may conflict with dragging)", "Pinch", "enum", "launchpad-close", choices=ACTIONS),
+    field("pinchIn", "Pinch inward action", "Pinch", "enum", "none", choices=ACTIONS),
+    field("pinchOut", "Spread outward action", "Pinch", "enum", "none", choices=ACTIONS),
+    field("threeFingerSpread", "Extra three-finger spread action (may conflict with dragging)", "Pinch", "enum", "none", choices=ACTIONS),
     field("pinchThreshold", "Pinch scale change threshold", "Pinch", "number", 0.10, minimum=0.10, maximum=0.50),
     field("launchpadPlugin", "Launchpad plugin ID", "Integration", "string", "okuma.dev_launchpad4omarchy"),
 ]
@@ -212,14 +212,31 @@ def preflight(settings):
             raise RuntimeError(f"Required command not found: {executable}")
     if run("hyprctl", "configerrors"):
         raise RuntimeError("Resolve existing Hyprland configuration errors first")
-    run("hyprctl", "eval", 'assert(type(hl.gesture) == "function", "Native Lua gesture API unavailable")')
+    try:
+        run("hyprctl", "eval", 'assert(type(hl.config) == "function" and type(hl.gesture) == "function", "Native Lua gesture API unavailable")')
+    except RuntimeError as error:
+        raise RuntimeError("This session requires Hyprland's native Lua hl.config/hl.gesture API "
+                           "(tested on 0.56.2). Legacy hyprland.conf sessions are not supported. "
+                           "No settings were saved. Details: " + str(error)) from error
+    return integration_warnings(settings)
+
+
+def integration_warnings(settings):
+    """Optional panels must never prevent independent touchpad settings applying."""
     actions = [settings[k] for k in ("swipeUp", "swipeDown", "pinchIn", "pinchOut")]
     if settings["pinchFingers"] != 3:
         actions.append(settings["threeFingerSpread"])
     if any(a.startswith("launchpad-") for a in actions):
-        status = run("omarchy-shell", "shell", "call", settings["launchpadPlugin"], "status", "")
-        if status not in {"open", "closed"}:
-            raise RuntimeError("Launchpad is not responding. Enable it or set Launchpad actions to none.")
+        try:
+            status = run("omarchy-shell", "shell", "call", settings["launchpadPlugin"], "status", "")
+            if status in {"open", "closed"}:
+                return []
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            pass
+        return [f"Launchpad {settings['launchpadPlugin']} is unavailable. Only Launchpad actions "
+                "will be inactive until it is enabled; touchpad, workspace and bar settings can still apply. "
+                "Select none for unused Launchpad actions."]
+    return []
 
 
 def safe_path(path):
@@ -305,13 +322,14 @@ def apply(home, settings):
     for path in (main, target, config):
         safe_path(path)
     if not main.is_file():
-        raise ValueError(f"Expected Hyprland Lua entry point: {main}")
+        raise ValueError(f"Expected Hyprland Lua entry point: {main}. Legacy hyprland.conf sessions "
+                         "are not supported; no settings were saved.")
     if target.exists() and not target.read_text().startswith(HEADER):
         raise ValueError(f"Refusing to overwrite an unowned file: {target}")
     existing = conflicts(home / "hypr", target)
     if existing:
         raise ValueError("Existing gesture registrations require manual migration:\n" + "\n".join(existing))
-    preflight(settings)
+    notices = preflight(settings)
     source, digest = render(settings)
     def verify():
         run("hyprctl", "eval", "_G.okuma_touchpad_digest = nil")
@@ -320,28 +338,48 @@ def apply(home, settings):
         if errors:
             raise RuntimeError(errors)
         run("hyprctl", "eval", f'assert(_G.okuma_touchpad_digest == "{digest}", "OkumaTouchpad loader was not executed")')
-        # Verify effective values, not just Lua parsing; later overrides must not win silently.
-        expected = {
-            "input:touchpad:natural_scroll": ("bool", settings["naturalScroll"]),
-            "input:touchpad:tap_to_click": ("bool", settings["tapToClick"]),
-            "input:touchpad:tap_button_map": ("str", settings["tapButtonMap"]),
-            "input:touchpad:clickfinger_behavior": ("bool", settings["clickfinger"]),
-            "input:touchpad:disable_while_typing": ("bool", settings["disableWhileTyping"]),
-            "input:touchpad:drag_3fg": ("int", int(settings["threeFingerDrag"])),
-            "input:touchpad:scroll_factor": ("float", settings["scrollFactor"]),
-            "gestures:workspace_swipe_invert": ("bool", settings["workspaceInvert"]),
-            "gestures:workspace_swipe_distance": ("int", settings["workspaceDistance"]),
-            "gestures:workspace_swipe_cancel_ratio": ("float", settings["workspaceCancelRatio"]),
-            "gestures:workspace_swipe_use_r": ("bool", settings["numericNeighbors"]),
-            "gestures:workspace_swipe_create_new": ("bool", settings["createEmptyWorkspaces"]),
-        }
-        for option, (kind, value) in expected.items():
-            actual = json.loads(run("hyprctl", "-j", "getoption", option)).get(kind)
-            matches = (isinstance(actual, (int, float)) and math.isclose(actual, value, rel_tol=1e-5)) if kind == "float" else actual == value
-            if not matches:
-                raise RuntimeError(f"Effective setting was overridden: {option}")
+        verify_effective(settings)
     transact({target: source, main: add_loader(main.read_text(), target),
               config: json.dumps(settings, indent=2) + "\n"}, verify)
+    return notices
+
+
+def verify_effective(settings):
+    """Verify live options as well as parsing, including when diagnosing saved profiles."""
+    expected = {
+        "input:touchpad:natural_scroll": ("bool", settings["naturalScroll"]),
+        "input:touchpad:tap_to_click": ("bool", settings["tapToClick"]),
+        "input:touchpad:tap_button_map": ("str", settings["tapButtonMap"]),
+        "input:touchpad:clickfinger_behavior": ("bool", settings["clickfinger"]),
+        "input:touchpad:disable_while_typing": ("bool", settings["disableWhileTyping"]),
+        "input:touchpad:drag_3fg": ("int", int(settings["threeFingerDrag"])),
+        "input:touchpad:scroll_factor": ("float", settings["scrollFactor"]),
+        "gestures:workspace_swipe_invert": ("bool", settings["workspaceInvert"]),
+        "gestures:workspace_swipe_distance": ("int", settings["workspaceDistance"]),
+        "gestures:workspace_swipe_cancel_ratio": ("float", settings["workspaceCancelRatio"]),
+        "gestures:workspace_swipe_use_r": ("bool", settings["numericNeighbors"]),
+        "gestures:workspace_swipe_create_new": ("bool", settings["createEmptyWorkspaces"]),
+    }
+    for option, (kind, value) in expected.items():
+        actual = json.loads(run("hyprctl", "-j", "getoption", option)).get(kind)
+        matches = (type(actual) in (int, float) and math.isclose(actual, value, rel_tol=1e-5)) if kind == "float" else actual == value
+        if not matches:
+            raise RuntimeError(f"Effective setting mismatch: {option}: expected {value!r}, got {actual!r}. "
+                               "Check later overrides and per-device configuration.")
+
+
+def application_status(home, settings):
+    _, target, config = paths(home)
+    if not config.is_file() or not target.is_file():
+        return dict(applied=False, message="Settings have not been applied on this device. Use Apply and save.")
+    try:
+        digest = render(settings)[1]
+        run("hyprctl", "eval", f'assert(_G.okuma_touchpad_digest == "{digest}", "Saved profile is not loaded; apply again")')
+        verify_effective(settings)
+    except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as error:
+        return dict(applied=False, message=str(error))
+    return dict(applied=True, message="Saved settings are loaded; global touchpad options verified. "
+                "Physical gesture recognition and per-device overrides still require testing.")
 
 
 def uninstall(home):
@@ -371,7 +409,8 @@ def main():
         _, target, config = paths(home)
         settings = read_settings(config, args.settings_json) if args.action != "remove" else None
         if args.action == "describe":
-            print(json.dumps(dict(settings=settings, fields=FIELDS, warnings=warnings(settings))))
+            print(json.dumps(dict(settings=settings, fields=FIELDS, warnings=warnings(settings),
+                                  status=application_status(home, settings))))
         elif args.action == "preview":
             print(render(settings)[0], end="")
             print("\n".join("Warning: " + w for w in warnings(settings)), file=sys.stderr)
@@ -379,20 +418,22 @@ def main():
             print("Device listing is not proof of physical gesture support.")
             print("Conflicting user Lua files:", json.dumps(conflicts(home / "hypr", target)))
             print("\n".join(warnings(settings)))
-            preflight(settings)
+            print("Hyprland version:\n" + run("hyprctl", "version"))
+            print("Configuration root:", home)
+            for notice in preflight(settings):
+                print("Warning:", notice)
             print(run("hyprctl", "devices", "-j"))
-            if target.is_file():
-                expected = render(settings)[1]
-                run("hyprctl", "eval", f'assert(_G.okuma_touchpad_digest == "{expected}", "Settings not applied")')
-                print("Managed configuration is loaded and matches saved settings.")
-            else:
-                print("Managed configuration has not been installed.")
+            state = application_status(home, settings)
+            print(state["message"])
+            if not state["applied"]:
+                raise RuntimeError("Managed settings are not active. Review the diagnostics above, then Apply and save.")
         else:
             with locked(home):
                 if args.action == "apply":
-                    apply(home, settings)
-                    print("Settings applied and saved. Test physical gestures on this device.")
-                    print("\n".join(warnings(settings)))
+                    notices = apply(home, settings)
+                    print("Settings applied and saved. Loader and global touchpad options verified. "
+                          "Test physical gestures on this device.")
+                    print("\n".join("Warning: " + w for w in notices + warnings(settings)))
                 else:
                     uninstall(home)
                     print("Managed gestures removed. Settings and timestamped backups were retained.")

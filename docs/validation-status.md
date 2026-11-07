@@ -1,6 +1,41 @@
 # Validation status
 
-## Automated checks
+## Version 0.1.1 portability fixes
+
+Confirmed and fixed:
+
+- Omarchy's git plugin installer never executes this project's `install.py`.
+  The keep-loaded panel now registers only its desktop entry/icon on load.
+- In a fresh Quickshell config, `Qt.resolvedUrl(".")` returned a directory without
+  a trailing slash. Concatenation produced a nonexistent helper path. Both helpers
+  now resolve their complete filenames directly. A real opt-in QML regression test
+  exercises this path rather than relying solely on text matching.
+- Missing optional Launchpad no longer aborts all input changes. New pinch/spread
+  defaults are `none`; explicit existing profiles retain their actions with warnings.
+- UI distinguishes applied, unapplied, dirty and failed states. Reading preferences
+  checks the live loader digest and effective global options.
+- Explicit local snapshot updates validate before replacement and retain a backup;
+  git checkouts are not overwritten.
+
+Validation for this revision:
+
+- 26 portable unit tests passed; opt-in real QML smoke test passed separately.
+- Python compilation, manifest validation, generated Lua parsing and desktop-file
+  validation passed. Standalone QML lint exits zero with unresolved import warnings;
+  it is not a clean semantic lint.
+- Isolated real Quickshell process registered the desktop entry/icon in a temporary
+  XDG data directory and populated all 23 settings without applying input changes.
+- Isolated QML reapplied the complete existing saved profile successfully. An invalid
+  draft then failed before writes, retained dirty state and showed a failure message.
+  Hashes of the user's entry point, generated Lua and preferences were unchanged.
+  `hyprctl reload` and `hyprctl configerrors` completed without configuration errors.
+- Existing shell process retained old QML after snapshot replacement and disable/
+  enable. The isolated process loaded the new version. A deliberate shell restart
+  may be necessary after updating; no full shell restart was forced in this check.
+- No remote-device or physical gesture acceptance is claimed. Per-device overrides
+  and driver recognition still require checking on the affected machine.
+
+## Original 0.1.0 automated checks (historical)
 
 - 17 portable unit tests passed, including generated callbacks executed by Lua
   and launcher ownership, symlink, repeat-install and removal tests.

@@ -24,15 +24,18 @@ Every field is available in the panel; numeric bounds are enforced by the helper
 | `swipeUp` | `"bar-hide"` | none, bar-hide, bar-show, bar-toggle, launchpad-open, launchpad-close, launchpad-toggle |
 | `swipeDown` | `"bar-show"` | none, bar-hide, bar-show, bar-toggle, launchpad-open, launchpad-close, launchpad-toggle |
 | `pinchFingers` | `4` | 3, 4 |
-| `pinchIn` | `"launchpad-open"` | none, bar-hide, bar-show, bar-toggle, launchpad-open, launchpad-close, launchpad-toggle |
-| `pinchOut` | `"launchpad-close"` | none, bar-hide, bar-show, bar-toggle, launchpad-open, launchpad-close, launchpad-toggle |
-| `threeFingerSpread` | `"launchpad-close"` | none, bar-hide, bar-show, bar-toggle, launchpad-open, launchpad-close, launchpad-toggle |
+| `pinchIn` | `"none"` | none, bar-hide, bar-show, bar-toggle, launchpad-open, launchpad-close, launchpad-toggle |
+| `pinchOut` | `"none"` | none, bar-hide, bar-show, bar-toggle, launchpad-open, launchpad-close, launchpad-toggle |
+| `threeFingerSpread` | `"none"` | none, bar-hide, bar-show, bar-toggle, launchpad-open, launchpad-close, launchpad-toggle |
 | `pinchThreshold` | `0.1` | 0.1–0.5 |
 | `launchpadPlugin` | `"okuma.dev_launchpad4omarchy"` | Plugin ID: letters, digits, dot, underscore, hyphen; no double dots |
 
 The schema is defined once in `touchpad.py` (`FIELDS`) and shared by the CLI and
-panel. `describe` returns this schema plus saved preferences. Example JSON profiles
-contain all fields to make behavior explicit.
+panel. `describe` returns this schema, saved preferences and a live application
+status (loader digest plus effective global options). Example JSON profiles contain
+all fields to make behavior explicit. Launchpad actions are opt-in; an unavailable
+Launchpad produces a warning without blocking independent settings. Existing saved
+profiles are not rewritten when defaults change.
 
 Primary three-finger pinch suppresses the extra three-finger spread registration.
 Disabling a binding means this project does not register it; it does not erase

@@ -16,10 +16,25 @@ configuration ownership, comment/string-aware conflict scanning, idempotent load
 and removal, symlink rejection, missing dependencies and rollback. Temporary
 configuration roots and mocks prevent changes to the live desktop.
 
+Optional real QML smoke test (requires a running Omarchy/Wayland session):
+
+```bash
+OKUMA_QML_SMOKE=1 python3 -m unittest discover -s tests -v
+```
+
+This starts a separate short-lived Quickshell process with fresh QML, reads saved
+settings and registers the launcher under a temporary XDG data directory. It does
+not Apply or alter input settings. It catches helper URL resolution problems that
+mocked Python tests cannot detect.
+
 ## Desktop acceptance checklist (required before release)
 
 - Record Omarchy, Quickshell, Hyprland, touchpad model and driver versions.
-- Install in a disposable user session; verify discovery, enable and `status` IPC.
+- Install via `omarchy plugin add ... --enable` in a disposable user session;
+  verify discovery, enable, `status` IPC and automatic Apps entry/icon registration.
+- Test explicit snapshot update with backup and git-managed update separately.
+  Confirm the running panel has the new `resultState` diagnostics field; stale QML
+  may require a deliberate shell restart.
 - Open/close/reopen the panel, including after plugin hot reload.
 - Test keyboard Tab/Space/Enter, Escape, scrolling, small screens and multiple monitors.
 - Verify every switch, enum, numeric field and plugin ID editor changes the intended
@@ -37,7 +52,9 @@ configuration roots and mocks prevent changes to the live desktop.
 - Test vertical actions, primary inward/outward pinch, extra three-finger spread,
   disabled actions, all action choices and per-gesture finger counts.
 - Test pinch thresholds and once-per-gesture behavior on supported hardware.
-- Test missing Launchpad, conflicting registrations and overridden effective values.
+- Test missing Launchpad: base settings must apply with an integration warning.
+  Test conflicting registrations and overridden effective values: apply must fail
+  visibly without saving the new profile. Test an incompatible Lua API message.
 - Test migration from Launchpad and manual bindings using backups.
 - Test apply, reapply, remove, repeated remove, rollback and manual restoration.
 - Confirm disabling the panel leaves native bindings until explicit removal; document

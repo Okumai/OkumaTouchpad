@@ -25,6 +25,25 @@ class LauncherTests(unittest.TestCase):
             launcher.remove(home)
             self.assertFalse(desktop.exists())
 
+    def test_unchanged_registration_does_not_rewrite_or_refresh_cache(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(launcher.shutil, "which", return_value=None):
+            home = Path(directory)
+            launcher.install(home)
+            desktop = home / "applications" / launcher.DESKTOP_ID
+            before = desktop.stat().st_mtime_ns
+            with patch.object(launcher.shutil, "which", return_value="/usr/bin/update-desktop-database"), patch.object(launcher.subprocess, "run") as run:
+                launcher.install(home)
+                run.assert_not_called()
+            self.assertEqual(desktop.stat().st_mtime_ns, before)
+
+    def test_plugin_registers_launcher_without_applying_settings(self):
+        qml = (Path(launcher.__file__).parent / "Touchpad.qml").read_text()
+        self.assertIn("Component.onCompleted: launcherWorker.running = true", qml)
+        self.assertIn('root.localFile("launcher.py"), "install"', qml)
+        self.assertIn('localFile("touchpad.py"), action', qml)
+        self.assertNotIn('directory + "touchpad.py"', qml)
+        self.assertNotIn('Component.onCompleted: execute("apply")', qml)
+
     def test_unowned_entry_refused(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
