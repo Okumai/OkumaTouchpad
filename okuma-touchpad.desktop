@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=OkumaTouchpad
+GenericName=Touchpad Settings
+Comment=Customize touchpad scrolling, dragging and native gestures
+Exec=omarchy-shell shell summon okuma.dev_touchpad4omarchy {}
+TryExec=omarchy-shell
+Icon=okuma-touchpad
+Terminal=false
+Categories=Settings;HardwareSettings;
+Keywords=touchpad;trackpad;gestures;scrolling;natural;Okuma;
+StartupNotify=false
+X-OkumaTouchpad-Managed=true
